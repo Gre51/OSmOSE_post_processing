@@ -8,6 +8,9 @@ import soundfile as sf
 import yaml
 from osekit.utils.timestamp_utils import strftime_osmose_format
 from pandas import DataFrame, read_csv
+from pandas.tseries import frequencies
+
+from post_processing.dataclass.data_aplose import DataAplose
 
 SAMPLE = """dataset,filename,start_time,end_time,start_frequency,end_frequency,annotation,annotator,start_datetime,end_datetime,type,score
 sample_dataset,2025_01_25_06_20_00,0.0,10.0,0.0,72000.0,lbl2,ann2,2025-01-25T06:20:00.000+00:00,2025-01-25T06:20:10.000+00:00,WEAK,0.11
@@ -61,8 +64,6 @@ sample_dataset,2025_01_25_06_20_30,2.26696083838941,2.79095421952565,9281.0,1645
 sample_dataset,2025_01_25_06_20_30,0.0,10.0,0.0,72000.0,lbl2,ann1,2025-01-25T06:20:30.000+00:00,2025-01-25T06:20:40.000+00:00,WEAK,0.56
 sample_dataset,2025_01_25_06_20_30,2.1042471042471,3.00330943188086,8296.0,18562.0,lbl2,ann1,2025-01-25T06:20:32.104+00:00,2025-01-25T06:20:33.003+00:00,BOX,0.13
 sample_dataset,2025_01_25_06_20_30,4.04026475455047,5.41919470490899,7312.0,21515.0,lbl2,ann1,2025-01-25T06:20:34.040+00:00,2025-01-25T06:20:35.419+00:00,BOX,0.92
-sample_dataset,2025_01_25_06_20_30,0.0,10.0,0.0,72000.0,lbl2,ann1,2025-01-25T06:20:30.000+00:00,2025-01-25T06:20:40.000+00:00,WEAK,0.76
-sample_dataset,2025_01_25_06_20_30,0.0,10.0,0.0,72000.0,lbl2,ann1,2025-01-25T06:20:30.000+00:00,2025-01-25T06:20:40.000+00:00,WEAK,0.31
 sample_dataset,2025_01_25_06_20_30,0.0,10.0,0.0,72000.0,lbl1,ann1,2025-01-25T06:20:30.000+00:00,2025-01-25T06:20:40.000+00:00,WEAK,0.41
 sample_dataset,2025_01_25_06_20_30,0.0,10.0,0.0,72000.0,lbl2,ann6,2025-01-25T06:20:30.000+00:00,2025-01-25T06:20:40.000+00:00,WEAK,0.15
 sample_dataset,2025_01_25_06_20_30,1.97186982901269,2.93160507446222,8578.0,17578.0,lbl2,ann6,2025-01-25T06:20:31.971+00:00,2025-01-25T06:20:32.931+00:00,BOX,0.49
@@ -122,8 +123,6 @@ sample_dataset,2025_01_26_06_20_00,0.0,10.0,0.0,72000.0,lbl2,ann3,2025-01-26T06:
 """
 
 
-
-
 STATUS = """dataset,filename,ann1,ann2,ann3,ann4,ann5,ann6
 sample_dataset,2025_01_25_06_20_00,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED
 sample_dataset,2025_01_25_06_20_10,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED
@@ -134,11 +133,27 @@ sample_dataset,2025_01_25_06_20_50,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED,
 sample_dataset,2025_01_26_06_20_20,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED,FINISHED
 """
 
+# Fake recording planning CSV used for tests
+RECORDING_PLANNING_CSV = """start_recording,end_recording,start_deployment,end_deployment
+2024-01-01 00:00:00+0000,2024-04-09 02:00:00+0000,2024-01-02 00:00:00+0000,2024-04-30 02:00:00+0000
+2024-04-30 01:00:00+0000,2024-07-14 06:00:00+0000,2024-04-30 02:00:00+0000,2024-07-06 14:00:00+0000
+"""
+
 
 @pytest.fixture
 def sample_df() -> DataFrame:
     df = read_csv(io.StringIO(SAMPLE), parse_dates=["start_datetime", "end_datetime"])
-    return df.sort_values(["start_datetime", "end_datetime", "annotator", "annotation"]).reset_index(drop=True)
+    return df.sort_values([
+        "start_datetime",
+        "end_datetime",
+        "annotator",
+        "annotation",
+    ]).reset_index(drop=True)
+
+
+@pytest.fixture
+def sample_data_aplose(sample_df: DataFrame) -> DataAplose:
+    return DataAplose(sample_df)
 
 
 @pytest.fixture
@@ -150,8 +165,12 @@ def sample_status() -> DataFrame:
 def sample_csv_result(tmp_path: Path, sample_df: DataFrame) -> Path:
     result_file = tmp_path / "results.csv"
     df_copy = sample_df.copy()
-    df_copy["start_datetime"] = [strftime_osmose_format(ts) for ts in sample_df["start_datetime"]]
-    df_copy["end_datetime"] = [strftime_osmose_format(ts) for ts in sample_df["end_datetime"]]
+    df_copy["start_datetime"] = [
+        strftime_osmose_format(ts) for ts in sample_df["start_datetime"]
+    ]
+    df_copy["end_datetime"] = [
+        strftime_osmose_format(ts) for ts in sample_df["end_datetime"]
+    ]
     df_copy.to_csv(result_file, index=False)
     return result_file
 
@@ -165,9 +184,9 @@ def sample_csv_timestamp(tmp_path: Path, sample_status: DataFrame) -> Path:
 
 @pytest.fixture
 def sample_yaml(
-        tmp_path: Path,
-        sample_csv_result: Path,
-        sample_csv_timestamp: Path,
+    tmp_path: Path,
+    sample_csv_result: Path,
+    sample_csv_timestamp: Path,
 ) -> Path:
     yaml_content = {
         f"{sample_csv_result}": {
@@ -214,7 +233,6 @@ def sample_audio(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def tmp_audio_dir(tmp_path: Path) -> Path:
-
     def create_file(path: Path, size: int = 2048):
         """Create a file of given size in bytes."""
         path.write_bytes(os.urandom(size))
@@ -228,3 +246,22 @@ def tmp_audio_dir(tmp_path: Path) -> Path:
     create_file(nested / "file4.wav")
     (tmp_path / "ignore.txt").write_text("not audio")
     return tmp_path
+
+
+@pytest.fixture
+def recording_planning_csv(tmp_path) -> Path:
+    """Create a temporary CSV file simulating a recording planning."""
+    path = tmp_path / "recording_planning.csv"
+    path.write_text(RECORDING_PLANNING_CSV)
+    return path
+
+
+@pytest.fixture
+def recording_planning_config(recording_planning_csv):
+    """Minimal config object compatible with RecordingPeriod.from_path."""
+
+    class RecordingPlanningConfig:
+        timestamp_file: Path = recording_planning_csv
+        timebin_origin = frequencies.to_offset("1min")
+
+    return RecordingPlanningConfig()

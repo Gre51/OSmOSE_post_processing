@@ -7,7 +7,7 @@ and other parameters.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -41,6 +41,12 @@ class DetectionFilter:
     box: bool = False
     filename_format: str = None
 
+    def __getitem__(self, key: str):
+        """Return the value of the given key."""
+        if key in {f.name for f in fields(self)}:
+            return getattr(self, key)
+        raise KeyError(key)
+
     @classmethod
     def from_yaml(
         cls,
@@ -65,8 +71,8 @@ class DetectionFilter:
 
     @classmethod
     def from_dict(
-            cls,
-            parameters: dict,
+        cls,
+        parameters: dict,
     ) -> DetectionFilter | list[DetectionFilter]:
         """Return a DetectionFilter object from a dict.
 
@@ -99,8 +105,7 @@ class DetectionFilter:
             if filters_dict.get("end"):
                 filters_dict["end"] = Timestamp(filters_dict["end"])
             if filters_dict.get("timestamp_file"):
-                filters_dict["timestamp_file"] = Path(
-                    filters_dict["timestamp_file"])
+                filters_dict["timestamp_file"] = Path(filters_dict["timestamp_file"])
 
             filters.append(cls(**filters_dict))
 
