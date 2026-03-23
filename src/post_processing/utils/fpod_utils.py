@@ -81,7 +81,7 @@ def pod2aplose(
         An APLOSE formatted DataFrame.
 
     """
-    fpod_start_dt = [tz.localize(entry) for entry in df["Datetime"]]
+    fpod_start_dt = [tz.localize(entry.floor(bin_size)) for entry in df["Datetime"]]
 
     data = {
         "dataset": [dataset_name] * len(df),
@@ -92,11 +92,9 @@ def pod2aplose(
         "end_frequency": [0] * len(df),
         "annotation": [annotation] * len(df),
         "annotator": [annotator] * len(df),
-        "start_datetime": [
-            strftime_osmose_format(entry.floor(bin_size)) for entry in fpod_start_dt
-        ],
+        "start_datetime": [strftime_osmose_format(entry) for entry in fpod_start_dt],
         "end_datetime": [
-            strftime_osmose_format(entry.ceil(bin_size)) for entry in fpod_start_dt
+            strftime_osmose_format(entry + bin_size) for entry in fpod_start_dt
         ],
         "type": ["WEAK"] * len(df),
         "deploy": df["Deploy"].tolist(),
@@ -145,8 +143,8 @@ def load_pod_folder(
         df = read_csv(
             file,
             sep=sep,
-            dtype={"microsec": "Int32"},
-            usecols=lambda col: col not in ["SmoothedICI", "ICIslope"],
+            dtype={"microsecond": "Int32"},
+            usecols=lambda col: col not in {"SmoothedICI", "ICIslope"},
         ).dropna()
 
         df["Deploy"] = file.stem.strip().lower().replace(" ", "_")
@@ -281,7 +279,7 @@ def process_feeding_buzz(
 
 def compute_ici(
     df: DataFrame,
-) -> Series[Any] | None:
+) -> Series | None:
     """Calculate Inter-Click Intervals from feeding buzz timestamps.
 
     The Inter-Click Intervals are expressed in minutes.
@@ -297,7 +295,6 @@ def compute_ici(
        A DataFrame containing non-negative Timestamps in minutes representing ICIs.
 
     """
-    df = df.copy()
     df["ICI_minutes"] = df["Datetime"].diff().dt.total_seconds() / 60
     return df[df["ICI_minutes"] > 0].dropna(subset=["ICI_minutes"])
 
@@ -305,7 +302,7 @@ def compute_ici(
 def log_ici(
     df: DataFrame,
 ) -> tuple[DataFrame, Any]:
-    """Convert ICI time deltas into minutes in order to process GMM.
+    """Convert ICI time deltas into minutes to process GMM.
 
     Parameters
     ----------
@@ -346,10 +343,12 @@ def gmm_ici(
     """
     df, ici = log_ici(df)
 
-    gmm = mixture.GaussianMixture(n_components=comp,
-                                  covariance_type="full",
-                                  random_state=42,
-                                  n_init=20)
+    gmm = mixture.GaussianMixture(
+        n_components=comp,
+        covariance_type="full",
+        random_state=42,
+        n_init=20,
+    )
     labels = gmm.fit_predict(ici)
 
     rank = argsort(argsort(gmm.means_.flatten()))
@@ -415,7 +414,7 @@ def cluster_ici(
     gmm = mixture.GaussianMixture(n_components=comp, covariance_type="full")
     gmm.fit(ar_ici)
 
-    component_names = ["Buzz ICIs", "Regular ICIs", "Long ICIs",]
+    component_names = ["Buzz ICIs", "Regular ICIs", "Long ICIs"]
     cluster_info = []
     for i in range(comp):
         means = sort(gmm.means_, axis=0)[i][0]
@@ -474,11 +473,6 @@ def plot_gmm_ici(
     comp: int
         Number of GMM components.
 
-    Returns
-    -------
-    tuple[plt.Figure, plt.Axes]
-        The matplotlib Figure and Axes objects for further customization.
-
     """
     _, log_ar = log_ici(df)
     _, gmm_icis = gmm_ici(df, comp)
@@ -511,10 +505,12 @@ def plot_gmm_ici(
             x_axis,
             gmm_icis.weights_[idx]
             * stats.norm.pdf(
-                x_axis, gmm_icis.means_[idx, 0], sqrt(gmm_icis.covariances_[idx, 0, 0]),
+                x_axis,
+                gmm_icis.means_[idx, 0],
+                sqrt(gmm_icis.covariances_[idx, 0, 0]),
             ).ravel(),
             label=f"(μ={gmm_icis.means_[idx, 0]:.2f},"
-                  f"σ={sqrt(gmm_icis.covariances_[idx, 0, 0]):.2f})",
+            f"σ={sqrt(gmm_icis.covariances_[idx, 0, 0]):.2f})",
         )
         lines += [line]
     (mixture_line,) = ax.plot(
@@ -639,8 +635,7 @@ def percent_calc(
 
     # Aggregate and compute metrics
     df = (
-        data
-        .groupby(group_cols)
+        data.groupby(group_cols)
         .agg(
             {
                 "DPh": "sum",
@@ -1172,7 +1167,7 @@ def hist_mean_m(
         ax.set_ylim(0, max_value * 1.1)
         ax.set_ylabel(y_lab or metric_mean, fontsize=10)
 
-        # Only set x-label on last subplot
+        # Only set x-label on the last subplot
         if i == n_sites - 1:
             ax.set_xlabel("Mois", fontsize=10)
             ax.set_xticks(
@@ -1257,7 +1252,7 @@ def hist_mean_h(
         ax.set_ylabel(y_lab or metric_mean, fontsize=10)
         ax.set_xticks(range(24))
 
-        # Only set x-label on last subplot
+        # Only set x-label on the last subplot
         if i == n_sites - 1:
             ax.set_xlabel("Heure", fontsize=10)
         if metric_mean in {"%buzzes_mean", "FBR_mean"}:
@@ -1293,7 +1288,7 @@ def hist_mean_s(
         Suffix for the title. If None, uses metric_mean
 
     """
-    fig, ax = plt.subplots(figsize=(10, 6))
+    _, ax = plt.subplots(figsize=(10, 6))
 
     # Group by site and calculate means if needed
     plot_data = df.groupby("site.name")[[metric_mean, metric_std]].mean().reset_index()
@@ -1394,7 +1389,7 @@ def hist_mean_season(
         ax.set_ylim(0, max_value * 1.1)
         ax.set_ylabel(y_lab or metric_mean, fontsize=10)
 
-        # Only set x-label on last subplot
+        # Only set x-label on the last subplot
         if i == n_sites - 1:
             ax.set_xlabel("Season", fontsize=10)
         if metric_mean in {"%buzzes_mean", "FBR_mean"}:
