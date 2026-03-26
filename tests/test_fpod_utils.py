@@ -1,4 +1,5 @@
 """FPOD/ CPOD processing functions tests."""
+
 import pytest
 import pytz
 from pandas import DataFrame
@@ -96,7 +97,7 @@ from post_processing.utils.fpod_utils import (
 #
 #     return data.reset_index(drop=True)
 
-#@pytest.fixture(scope="module")
+# @pytest.fixture(scope="module")
 # @dt.working_directory(__file__)
 # def df_raw() -> DataFrame:
 #     return read_csv("pod_raw.csv")
@@ -106,7 +107,7 @@ from post_processing.utils.fpod_utils import (
 # def df_ap() -> DataFrame:
 #     return read_csv("pod_aplose.csv")
 
-#@pytest.mark.mandatory
+# @pytest.mark.mandatory
 # def test_columns(df_raw: DataFrame) -> None:
 #     dt.validate(
 #         df_raw.columns,
@@ -142,7 +143,7 @@ def test_csv_folder_single_file(tmp_path) -> None:
     csv_file = tmp_path / "data.csv"
     csv_file.write_text("col1;col2\nval1;val2\nval3;val4", encoding="latin-1")
 
-    result = load_pod_folder(tmp_path)
+    result = load_pod_folder(tmp_path, "csv")
 
     assert isinstance(result, DataFrame)
     assert len(result) == 2
@@ -453,19 +454,16 @@ def test_pod2aplose_index_reset(timezone):
     """Test that index is properly reset after sorting."""
     df = DataFrame({
         "ChunkEnd": ["15/01/2024 12:00", "15/01/2024 10:00"],
-        "deploy.name": ["d1", "d2"]
+        "deploy.name": ["d1", "d2"],
     })
 
     result = pod2aplose(
-        df=df,
-        tz=timezone,
-        dataset_name="dataset",
-        annotation="click",
-        annotator="john"
+        df=df, tz=timezone, dataset_name="dataset", annotation="click", annotator="john"
     )
 
     # Index should be 0, 1 after reset
     assert result.index.tolist() == [0, 1]
+
 
 # meta_cut_aplose
 

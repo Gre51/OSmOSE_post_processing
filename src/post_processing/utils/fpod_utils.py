@@ -22,7 +22,7 @@ from numpy import (
     sqrt,
     zeros,
 )
-from osekit.utils.timestamp_utils import strftime_osmose_format, strptime_from_text
+from osekit.utils.timestamp import strftime_osmose_format, strptime_from_text
 from pandas import (
     DataFrame,
     DateOffset,
@@ -206,8 +206,9 @@ def get_feeding_buzz_datetime(row: Series) -> Timestamp:
         exceptions.append(e)
 
     try:
-        return (strptime_from_text(row["Minute"], "%-d/%-m/%Y %H:%M") +
-                Timedelta(microseconds=row["microsec"]))
+        return strptime_from_text(row["Minute"], "%-d/%-m/%Y %H:%M") + Timedelta(
+            microseconds=row["microsec"]
+        )
     except (KeyError, TypeError, ValueError) as e:
         exceptions.append(e)
 
@@ -347,10 +348,9 @@ def gmm_ici(
     """
     df, ici = log_ici(df)
 
-    gmm = mixture.GaussianMixture(n_components=comp,
-                                  covariance_type="full",
-                                  random_state=42,
-                                  n_init=20)
+    gmm = mixture.GaussianMixture(
+        n_components=comp, covariance_type="full", random_state=42, n_init=20
+    )
     labels = gmm.fit_predict(ici)
 
     rank = argsort(argsort(gmm.means_.flatten()))
@@ -416,7 +416,11 @@ def cluster_ici(
     gmm = mixture.GaussianMixture(n_components=comp, covariance_type="full")
     gmm.fit(ar_ici)
 
-    component_names = ["Buzz ICIs", "Regular ICIs", "Long ICIs",]
+    component_names = [
+        "Buzz ICIs",
+        "Regular ICIs",
+        "Long ICIs",
+    ]
     cluster_info = []
     for i in range(comp):
         means = sort(gmm.means_, axis=0)[i][0]
@@ -512,10 +516,12 @@ def plot_gmm_ici(
             x_axis,
             gmm_icis.weights_[idx]
             * stats.norm.pdf(
-                x_axis, gmm_icis.means_[idx, 0], sqrt(gmm_icis.covariances_[idx, 0, 0]),
+                x_axis,
+                gmm_icis.means_[idx, 0],
+                sqrt(gmm_icis.covariances_[idx, 0, 0]),
             ).ravel(),
             label=f"(μ={gmm_icis.means_[idx, 0]:.2f},"
-                  f"σ={sqrt(gmm_icis.covariances_[idx, 0, 0]):.2f})",
+            f"σ={sqrt(gmm_icis.covariances_[idx, 0, 0]):.2f})",
         )
         lines += [line]
     (mixture_line,) = ax.plot(
@@ -640,8 +646,7 @@ def percent_calc(
 
     # Aggregate and compute metrics
     df = (
-        data
-        .groupby(time_unit)
+        data.groupby(time_unit)
         .agg(
             {
                 "DPh": "sum",
@@ -656,7 +661,9 @@ def percent_calc(
     df["%click"] = df["dpm_count"] * 100 / (df["Day"] * 60)
     df["%DPh"] = df["DPh"] * 100 / df["Day"]
     df["FBR"] = df.apply(
-        lambda row: (row["Foraging"] * 100 / row["dpm_count"]) if row["dpm_count"] > 0 else 0,
+        lambda row: (row["Foraging"] * 100 / row["dpm_count"])
+        if row["dpm_count"] > 0
+        else 0,
         axis=1,
     )
     df["%buzzes"] = df["Foraging"] * 100 / (df["Day"] * 60)

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytz
 from osekit.config import TIMESTAMP_FORMAT_AUDIO_FILE
-from osekit.utils.timestamp_utils import strftime_osmose_format, strptime_from_text
+from osekit.utils.timestamp import strftime_osmose_format, strptime_from_text
 from pandas import (
     DataFrame,
     Timedelta,
