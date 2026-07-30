@@ -1,299 +1,523 @@
 """FPOD/ CPOD processing functions tests."""
-import io
-from datetime import datetime
+
+import secrets
+from datetime import tzinfo
 from pathlib import Path
 
 import pytest
-from osekit.utils.timestamp_utils import strptime_from_text
-from pandas import DataFrame, Timestamp, read_csv, concat
-from pandas.testing import assert_frame_equal
+import pytz
+from pandas import DataFrame, Timedelta, Timestamp
 
-from post_processing.utils.fpod_utils import (
-    txt_folder,
-    csv_folder,
-    deploy_period,
+from disclose.utils.pod import (
+    fit_gmm,
+    load_pod_folder,
     pod2aplose,
-    actual_data,
-    add_utc,
-    extract_site,
-    required_columns,
-    parse_timestamps,
-    create_mask,
-    is_dpm_col,
-    resample_dpm)
+    process_feeding_buzz,
+    process_timelost,
+)
 
-# SAMPLE_POD = """File,ChunkEnd,DPM,Nall,MinsOn
-# sample_dataset,2023/11/29 08:05,0,0,0
-#
-# """
-# SAMPLE_AP = """dataset,filename,start_time,end_time,start_frequency,end_frequency,
-# annotation,annotator,start_datetime,end_datetime,is_box
-# sample_dataset,,0,60,0,0,ann1,POD,2023-11-29T08:30:00.000+00:00,2023-11-29T08:31:00.000+00:00,0
-# sample_dataset,,0,60,0,0,ann1,POD,2023-11-29T08:31:00.000+00:00,2023-11-29T08:32:00.000+00:00,0
-# sample_dataset,,0,60,0,0,ann1,POD,2023-11-29T09:30:00.000+00:00,2023-11-29T09:31:00.000+00:00,0
-# sample_dataset,,0,60,0,0,ann1,POD,2023-11-30T08:30:00.000+00:00,2023-11-30T08:31:00.000+00:00,0
-# sample_dataset,,0,60,0,0,ann1,POD,2023-12-29T08:30:00.000+00:00,2023-12-29T08:31:00.000+00:00,0
-# sample_dataset,,0,60,0,0,ann1,POD,2024-11-29T08:30:00.000+00:00,2024-11-29T08:31:00.000+00:00,0
-# """
-#
-# @pytest.fixture
-# def pod_dataframe() -> DataFrame:
-#     data = DataFrame(
-#         {
-#             "File": [
-#                 "sample_dataset",
-#                 "sample_dataset",
-#                 "sample_dataset",
-#                 "sample_dataset",
-#                 "sample_dataset",
-#                 "sample_dataset",
-#             ],
-#             "ChunkEnd": [
-#                 Timestamp("2023/11/29 08:30"),
-#                 Timestamp("2023/11/29 08:31"),
-#                 Timestamp("2023/11/29 08:32"),
-#                 Timestamp("2023/11/29 08:33"),
-#                 Timestamp("2023/11/29 08:34"),
-#                 Timestamp("2023/11/29 08:35"),
-#             ],
-#             "deploy.name": [
-#                 "site_deploy",
-#                 "site_deploy",
-#                 "site_deploy",
-#                 "site_deploy",
-#                 "site_deploy",
-#                 "site_deploy",
-#             ],
-#             "DPM": [1, 1, 0, 0, 0, 0],
-#             "Nall": [44, 66, 0, 22, 0, 0],
-#             "MinsOn": [1, 1, 1, 1, 1, 0],
-#         },
-#     )
-#
-#     return data.reset_index(drop=True)
-#
-#
-# @pytest.fixture
-# def aplose_dataframe() -> DataFrame:
-#     data = DataFrame(
-#         {
-#             "dataset": ["dataset_test", "dataset_test", "dataset_test", "dataset_test",
-#                         "dataset_test", "dataset_test"],
-#             "filename": ["", "", "", ""],
-#             "start_time": [0, 0, 0, 0, 0, 0],
-#             "end_time": [60, 60, 60, 60, 60, 60],
-#             "start_frequency": [0, 0, 0, 0, 0, 0],
-#             "end_frequency": [0, 0, 0, 0, 0, 0],
-#             "annotation": ["ann1", "ann1", "ann1", "ann1", "ann1", "ann1"],
-#             "annotator": ["POD", "POD", "POD", "POD", "POD", "POD"],
-#             "start_datetime": [
-#                 Timestamp("2023-11-29T08:30:00.000+00:00"),
-#                 Timestamp("2023-11-29T08:31:00.000+00:00"),
-#                 Timestamp("2023-11-29T09:31:00.000+00:00"),
-#                 Timestamp("2023-11-30T09:31:00.000+00:00"),
-#                 Timestamp("2023-12-30T09:31:00.000+00:00"),
-#                 Timestamp("2024-12-30T09:31:00.000+00:00"),
-#             ],
-#             "end_datetime": [
-#                 Timestamp("2023-11-29T08:31:00.000+00:00"),
-#                 Timestamp("2023-11-29T08:32:00.000+00:00"),
-#                 Timestamp("2023-11-29T09:32:00.000+00:00"),
-#                 Timestamp("2023-11-30T09:32:00.000+00:00"),
-#                 Timestamp("2023-12-30T09:32:00.000+00:00"),
-#                 Timestamp("2024-12-30T09:32:00.000+00:00"),
-#             ],
-#             "is_box": [0, 0, 0, 0, 0, 0],
-#             "deploy.name": ["site_campaign", "site_campaign", "site_campaign",
-#                             "site_campaign", "site_campaign", "site_campaign"],
-#         },
-#     )
-#
-#     return data.reset_index(drop=True)
+CLICKS_CPOD = """Minute,microsec,cycles,SPL_Pa,kHz,Bandwidth,end kHz,Qn,TrN
+25/1/2019 11:45,55643215,7,38,130,0,121,2,38
+25/1/2019 11:45,55707365,7,44,130,0,125,2,38
+25/1/2019 11:45,55770865,7,36,132,0,131,2,38
+25/1/2019 11:45,55830500,11,34,136,1,108,2,38
+25/1/2019 11:45,55890495,10,33,135,1,131,2,38
+"""
 
-#@pytest.fixture(scope="module")
-# @dt.working_directory(__file__)
-# def df_raw() -> DataFrame:
-#     return read_csv("pod_raw.csv")
-#
-# @pytest.fixture(scope="module")
-# @dt.working_directory(__file__)
-# def df_ap() -> DataFrame:
-#     return read_csv("pod_aplose.csv")
+CLICKS_FPOD = """File,Minute,microsec,ICI,TrnAvPRF,Ncyc,ClkKHZ,IPIbefore,IPIatMax,IPIplus1,IPIplus2,EndIPI,ClkIPIrange,maxPk,maxPkE,Pkminus1%,Pkplus1%,PkAt,AmpReversals,tRateScore,Qn,TrnIDn,ClassID,Log(PRF)*10
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,64358756,40266515,10595,98,11,121,256,33,34,34,31,3,78,78,98,91,6,1,10,2,1,0,19
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,64358756,40276675,10160,98,11,121,256,33,33,33,33,3,79,79,98,91,5,1,10,2,1,0,19
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,64358756,40286600,9925,98,11,121,256,33,33,33,33,2,84,84,88,94,4,1,10,2,1,0,20
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,64358756,40296440,9840,98,10,121,256,33,33,34,33,3,79,79,91,100,4,1,10,2,1,0,20
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,64358756,40306520,10080,98,11,121,256,33,33,34,33,3,76,76,92,96,4,1,10,2,1,0,19
+"""
 
-#@pytest.mark.mandatory
-# def test_columns(df_raw: DataFrame) -> None:
-#     dt.validate(
-#         df_raw.columns,
-#         {"File", "ChunkEnd", "DPM", "Nall", "MinsOn"},
-#     )
-#
-# @pytest.mark.mandatory
-# def test_columns(df_ap: DataFrame) -> None:
-#     dt.validate(
-#         df_ap.columns,
-#         {"dataset","filename","start_time","end_time","start_frequency","end_frequency",
-#          "annotation","annotator","start_datetime","end_datetime","is_box"},
-#     )
-#
-# def test_chunk_end(df_raw: DataFrame) -> None:
-#     dt.validate(df_raw["ChunkEnd"],
-#                 strptime_from_text(df_raw["ChunkEnd"], "%Y/%m/%d %H:%M"))
-#
-# def test_start_datetime(df_ap: DataFrame) -> None:
-#     dt.validate(df_ap["start_datetime"], strptime_from_text(df_ap["start_datetime"],
-#                                             "%Y-%m-%dT%H:%M:%S"))
+TIMELOST = """File	podN,ChunkEnd,Minute,Temp,Angle,MinutesON,NBHF_DPM,DPM,Nfiltered/m,kHz_continuous_noise,NBHFclx,DOL_DPM,DOLclx,SONAR_DPM,SONARclx,Nall/m,%TimeLost,%m SonarRisk,%mSediment noise,LandmarkSeq_total,avOpThreshold
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,6669,05/05/2022 10:59,64348499,21.4,0,0m ON,0,108,14,0,0,0,0,0,0,,,0,0,0,0
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,6669,05/05/2022 11:59,64348559,21.4,0,0m ON,0,108,14,0,0,0,0,0,0,548.9,100,0,0,0,0
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,6669,05/05/2022 12:59,64348619,22.4,0,0,0,81.6,60,0,0,0,0,0,0,0.2,100,0,0,0,0
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,6669,05/05/2022 13:59,64348679,23,4,1.62,20,78,60,0,0,0,0,0,0,0,100,0,0,0,0
+CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3,6669,05/05/2022 14:59,64348739,23,3,0.28,0,78,60,0,0,0,0,0,0,0,100,0,0,0,0
+"""
 
-# @pytest.fixture
-# def sample_pod() -> DataFrame:
-#     df = read_csv(io.StringIO(SAMPLE_POD), parse_dates=["ChunkEnd"])
-#     return df.sort_values(["ChunkEnd"]).reset_index(drop=True)
+
+@pytest.fixture
+def pod_dataframe() -> DataFrame:
+    return DataFrame({
+        "File": [
+            "Site A ile Haute 2019 01 25 POD3055 file01.CP3",
+            "Site A ile Haute 2019 01 25 POD3055 file01.CP3",
+            "Site A ile Haute 2019 01 25 POD3055 file01.CP3",
+            "Site A ile Haute 2019 01 25 POD3055 file01.CP3",
+            "Site A ile Haute 2019 01 25 POD3055 file01.CP3",
+        ],
+        "podN": [6669, 6669, 6669, 6669, 6669],
+        "ChunkEnd": [
+            "24/01/2019 06:17",
+            "24/01/2019 06:18",
+            "24/01/2019 06:19",
+            "24/01/2019 06:20",
+            "24/01/2019 06:21",
+        ],
+        "Minute": [64348546, 64348547, 64348548, 64348549, 64348550],
+        "DPM": [0, 1, 1, 0, 0],
+        "Nall": [0, 216, 75, 0, 28],
+        "MinsOn": [0, 1, 1, 1, 1],
+    })
+
+
+@pytest.fixture
+def click_dataframe() -> DataFrame:
+    return DataFrame({
+        "File": [
+            "CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3",
+            "CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3",
+            "CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3",
+            "CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3",
+            "CETIROISEPHASE1POINTB 2022 05 05 FPOD_6669 file0.FP3",
+        ],
+        "microsec": [40255920, 40266515, 40276675, 40286600, 40296440],
+        "Minute": [64348546, 64348547, 64348548, 64348549, 64348550],
+    })
+
+
+@pytest.fixture
+def pod_aplose(sample_df: DataFrame) -> DataFrame:
+    sample_df["type"] = "WEAK"
+    return sample_df
 
 
 # csv_folder
-def test_csv_folder_single_file(tmp_path) -> None:
-    """Test processing a single CSV file."""
-    # Create a CSV file
-    csv_file = tmp_path / "data.csv"
-    csv_file.write_text("col1;col2\nval1;val2\nval3;val4", encoding="latin-1")
+def test_folder_multiple(pod_dataframe: DataFrame, tmp_path: Path) -> None:
+    """Test processing multiple CSV files."""
+    folder = tmp_path / "pod_folder"
+    folder.mkdir(parents=True, exist_ok=True)
 
-    result = csv_folder(tmp_path)
+    pod_dataframe.to_csv(folder / "pod_dataframe1.csv", index=False)
+    pod_dataframe.to_csv(folder / "pod_dataframe2.csv", index=False)
+
+    result = load_pod_folder(folder, ext="csv")
 
     assert isinstance(result, DataFrame)
-    assert len(result) == 2
-    assert "deploy.name" in result.columns
-    assert all(result["deploy.name"] == "data")
-    assert list(result.columns) == ["col1", "col2", "deploy.name"]
+    assert set(result["dataset"]) == {"pod_dataframe1", "pod_dataframe2"}
+    assert list(result.columns) == [
+        "File",
+        "podN",
+        "ChunkEnd",
+        "Minute",
+        "DPM",
+        "Nall",
+        "MinsOn",
+        "dataset",
+        "Datetime",
+    ]
+
+
+def test_folder_single_txt(
+    monkeypatch: pytest.MonkeyPatch, click_dataframe: DataFrame, tmp_path: Path
+) -> None:
+    """Test processing a single CSV file."""
+    monkeypatch.setattr(
+        "disclose.utils.pod.process_feeding_buzz", lambda df, species: df
+    )
+    txt_file = tmp_path / "click_folder" / "click_dataframe.txt"
+    txt_file.parent.mkdir(parents=True, exist_ok=True)
+    click_dataframe.to_csv(txt_file, index=False)
+    result = load_pod_folder(txt_file.parent, ext="txt")
+
+    assert isinstance(result, DataFrame)
+    assert "dataset" in result.columns
+    assert all(result["dataset"] == "click_dataframe")
+    assert list(result.columns) == [
+        "File",
+        "microsec",
+        "Minute",
+        "dataset",
+        "Datetime",
+    ]
+
+
+def test_folder_multiple_txt(click_dataframe: DataFrame, tmp_path: Path) -> None:
+    """Test processing multiple txt files."""
+    folder = tmp_path / "click_folder"
+    folder.mkdir(parents=True, exist_ok=True)
+
+    click_dataframe.to_csv(folder / "click_dataframe1.txt", index=False)
+    click_dataframe.to_csv(folder / "click_dataframe2.txt", index=False)
+
+    result = load_pod_folder(folder, ext="txt")
+
+    assert isinstance(result, DataFrame)
+    assert "dataset" in result.columns
+    assert set(result["dataset"]) == {"click_dataframe1", "click_dataframe2"}
+    assert list(result.columns) == [
+        "File",
+        "microsec",
+        "Minute",
+        "dataset",
+        "Datetime",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mocked_df", "should_raise"),
+    [
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "DPM": [1],
+                "MinsOn": [30.0],
+                "microsec": [100],
+            }),
+            False,
+            id="valid-dpm-columns",
+        ),
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "%TimeLost": [0.1],
+                "Nall/m": [1.0],
+                "File": ["f1"],
+                "microsec": [100],
+            }),
+            False,
+            id="valid-timelost-columns",
+        ),
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "col1": [0.1],
+                "Nall/m": [1.0],
+                "File": ["f1"],
+                "microsec": [100],
+            }),
+            True,
+            id="invalid-missing-timelost",
+        ),
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "%TimeLost": [0.1],
+                "col1": [1.0],
+                "File": ["f1"],
+                "microsec": [100],
+            }),
+            True,
+            id="invalid-missing-nall",
+        ),
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "File": ["f1"],
+                "col1": [1],
+                "MinsOn": ["x"],
+                "microsec": [100],
+            }),
+            True,
+            id="invalid-missing-dpm",
+        ),
+        pytest.param(
+            DataFrame({
+                "ChunkEnd": ["01/01/2024 12:00"],
+                "File": ["f1"],
+                "DPM": [1],
+                "col3": ["x"],
+                "microsec": [100],
+            }),
+            True,
+            id="invalid-missing-minson",
+        ),
+        pytest.param(
+            DataFrame({"col1": [1], "col2": [2], "col3": [3]}),
+            True,
+            id="invalid-no-required-columns",
+        ),
+    ],
+)
+def test_right_csv_format(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mocked_df: DataFrame,
+    should_raise: bool,
+) -> None:
+    """Mocked read_csv to test load_pod_folder column validation."""
+    fake_path = Path("fake/deploy_01.csv")
+
+    monkeypatch.setattr(Path, "rglob", lambda self, pattern: [fake_path])
+    monkeypatch.setattr("disclose.utils.pod.find_delimiter", lambda f: ";")
+    monkeypatch.setattr(
+        "disclose.utils.pod.read_csv", lambda *args, **kwargs: mocked_df
+    )
+
+    if should_raise:
+        with pytest.raises((ValueError, KeyError)):
+            load_pod_folder(Path("fake/folder"), "csv")
+    else:
+        result = load_pod_folder(Path("fake/folder"), "csv")
+        assert isinstance(result, DataFrame)
+
 
 # pod2aplose
+@pytest.fixture
+def sample_df() -> DataFrame:
+    return DataFrame({
+        "Datetime": [
+            Timestamp("15-01-2024 10:30:00"),
+            Timestamp("15-01-2024 11:00:00"),
+            Timestamp("15-01-2024 09:45:00"),
+        ],
+        "Deploy": ["deploy1", "deploy2", "deploy1"],
+    })
 
 
-# meta_cut_aplose
+@pytest.fixture
+def empty_df() -> DataFrame:
+    return DataFrame({
+        "Datetime": [],
+        "Deploy": [],
+    })
 
 
-# build_range
+@pytest.fixture
+def timezone() -> tzinfo:
+    return pytz.UTC
 
 
-# feeding_buzz
+def test_pod2aplose_basic_structure(sample_df: DataFrame, timezone: tzinfo) -> None:
+    """Test that basic structure and required columns are present."""
+    result = pod2aplose(
+        df=sample_df,
+        tz=pytz.UTC,
+        dataset_name="dataset",
+        label="porpoise",
+        annotator="fpod",
+        bin_size=Timedelta(seconds=60),
+    )
+
+    expected_columns = [
+        "dataset",
+        "filename",
+        "start_time",
+        "end_time",
+        "min_frequency",
+        "max_frequency",
+        "label",
+        "annotator",
+        "start_datetime",
+        "end_datetime",
+        "type",
+    ]
+
+    assert isinstance(result, DataFrame)
+    assert list(result.columns) == expected_columns
+    assert len(result) == len(sample_df)
+    assert result["dataset"].iloc[0] == "dataset"
+    assert all(result["dataset"] == "dataset")
+    assert result["filename"].iloc[0] != 0
+    assert all(result["start_time"] == 0)
+    assert all(result["end_time"] == 60)
+    assert all(result["min_frequency"] == 0)
+    assert all(result["max_frequency"] == 0)
+    assert all(result["label"] == "porpoise")
+    assert all(result["annotator"] == "fpod")
+    assert len(result["start_datetime"].iloc[0]) > 0
+    assert len(result["end_datetime"].iloc[0]) > 0
+    assert len(result["dataset"]) == len(sample_df)
 
 
-# assign_daytime
+def test_pod2aplose_empty_dataframe(empty_df: DataFrame, timezone: tzinfo) -> None:
+    """Test handling of empty DataFrame."""
+    result = pod2aplose(
+        df=empty_df,
+        tz=pytz.UTC,
+        dataset_name="dataset",
+        label="porpoise",
+        annotator="fpod",
+        bin_size=Timedelta(seconds=60),
+    )
+
+    assert len(result) == 0
+    assert list(result.columns) == [
+        "dataset",
+        "filename",
+        "start_time",
+        "end_time",
+        "min_frequency",
+        "max_frequency",
+        "label",
+        "annotator",
+        "start_datetime",
+        "end_datetime",
+        "type",
+    ]
 
 
-# fb_folder
-# def test_fb_folder_non_existent() -> None:
-#     with pytest.raises(FileNotFoundError):
-#         txt_folder(Path("/non/existent/folder"))
-#
-# def test_fb_folder_no_files(tmp_path: pytest.fixture) -> None:
-#     with pytest.raises(ValueError, match="No .txt files found"):
-#         txt_folder(tmp_path)
-
-# extract_site
-# def test_extract_site(self) -> None:
-#     input_data = [
-#         {"deploy.name":"Walde_Phase46"},
-#         {"deploy.name":"Site A Ile Haute_Phase8"},
-#         {"deploy.name":"Site B Ile Heugh_Phase9"},
-#         {"deploy.name":"Point E_Phase 4"},
-#     ]
-#     expected_site = [
-#         "Walde",
-#         "Site A Ile Haute",
-#         "Site B Ile Heugh",
-#         "Point E",
-#     ]
-#     expected_campaign = [
-#         "Phase46",
-#         "Phase8",
-#         "Phase9",
-#         "Phase 4",
-#     ]
-#
-#     for variant, (input_row, site, campaign) in enumerate(
-#         zip(input_data, expected_site, expected_campaign, strict=False), start=1):
-#         with self.subTest(
-#             f"variation #{variant}",
-#             deploy_name=input_row["deploy.name"],
-#             expected_site=site,
-#             expected_campaign=campaign,
-#         ):
-#             df = DataFrame([input_row])
-#             result = extract_site(df)
-#             actual_site = result["site.name"].iloc[0]
-#             actual_campaign = result["campaign.name"].iloc[0]
-#
-#             error_message_site = (
-#                 f'Called extract_site() with deploy.name="{input_row["deploy.name"]}". '
-#                 f'The function returned site.name="{actual_site}", but the test '
-#                 f'expected "{expected_site}".'
-#             )
-#
-#             error_message_campaign = (
-#                 f'Called extract_site() with deploy.name="{input_row["deploy.name"]}". '
-#                 f'The function returned campaign.name="{actual_campaign}", but the test'
-#                 f'expected "{expected_campaign}".'
-#             )
-#
-#             assert actual_site == expected_site, error_message_site
-#             assert actual_campaign == expected_campaign, error_message_campaign
-#
-#             assert "deploy.name" in result.columns
-#             assert "value" in result.columns
-
-# csv_folder
-# def test_csv_folder_non_existent() -> None:
-#     with pytest.raises(FileNotFoundError):
-#         csv_folder(Path("/non/existent/folder"))
-#
-# def test_csv_folder_no_files(tmp_path: pytest.fixture) -> None:
-#     with pytest.raises(ValueError, match="No .csv files found"):
-#         csv_folder(tmp_path)
-
-# is_dpm_col
+# process_feeding_buzz
+@pytest.fixture
+def sample_fb() -> DataFrame:
+    return DataFrame({
+        "Datetime": [
+            Timestamp("2018-10-26 08:47:21.524095"),
+            Timestamp("2018-10-26 08:47:21.561215"),
+            Timestamp("2018-10-26 08:47:21.597925"),
+            Timestamp("2018-10-26 08:47:21.706350"),
+            Timestamp("2018-10-26 08:47:21.934405"),
+            Timestamp("2019-05-03 19:55:05.985310"),
+            Timestamp("2019-05-03 19:55:05.983675"),
+            Timestamp("2019-05-03 19:55:05.982035"),
+            Timestamp("2019-05-15 01:38:25.499480"),
+        ],
+        "dataset": [
+            "deploy1",
+            "deploy1",
+            "deploy1",
+            "deploy2",
+            "deploy2",
+            "deploy2",
+            "deploy3",
+            "deploy3",
+            "deploy3",
+        ],
+    })
 
 
-# pf_datetime
+rng = secrets.SystemRandom()
+comp = rng.randrange(1, 5)
 
 
-# build_aggregation_dict
+def test_fit_gmm_output(sample_fb: DataFrame) -> None:
+    """Test that basic structure and required columns are present."""
+    clustering, ici_log, _ = fit_gmm(
+        df=sample_fb,
+        comp=comp,
+    )
+
+    expected_columns = [
+        "Datetime",
+        "dataset",
+        "ICI_minutes",
+        "cluster",
+    ]
+
+    assert isinstance(clustering, DataFrame)
+    assert list(clustering.columns) == expected_columns
+    assert clustering["Datetime"].iloc[0] != sample_fb["Datetime"].iloc[0]
+    assert set(clustering["dataset"]) == {"deploy1", "deploy2", "deploy3"}
+    assert len(clustering["cluster"].unique()) == comp
+    assert len(clustering) == len(ici_log)
 
 
-# resample_dpm
+@pytest.mark.parametrize(
+    ("mocked_species", "mocked_df", "should_raise"),
+    [
+        pytest.param(
+            "commerson",
+            DataFrame({
+                "Datetime": [
+                    Timestamp("2019-04-16 16:06:19.948345"),
+                    Timestamp("2019-04-16 16:06:19.950840"),
+                    Timestamp("2019-04-16 16:06:19.953345"),
+                ],
+            }),
+            False,
+            id="valid-species-commerson",
+        ),
+        pytest.param(
+            "porpoise",
+            DataFrame({
+                "Datetime": [
+                    Timestamp("2020-04-09 13:51:24.133750"),
+                    Timestamp("2020-04-09 13:51:24.124155"),
+                    Timestamp("2020-04-09 13:51:24.114335"),
+                    Timestamp("2020-04-09 13:51:24.104345"),
+                ],
+            }),
+            False,
+            id="valid-species-porpoise",
+        ),
+        pytest.param(
+            "delphinid",
+            DataFrame({
+                "Datetime": [
+                    Timestamp("2019-05-14 00:16:41.327605"),
+                    Timestamp("2019-05-14 00:16:41.345310"),
+                    Timestamp("2019-05-14 00:16:41.363285"),
+                    Timestamp("2019-05-14 00:16:41.382405"),
+                ],
+            }),
+            False,
+            id="valid-species-delphinid",
+        ),
+        pytest.param(
+            "elephant",
+            DataFrame({
+                "Datetime": [
+                    Timestamp("2020-04-16 00:06:32.327605"),
+                    Timestamp("2020-04-16 00:06:32.345310"),
+                    Timestamp("2020-04-16 00:06:32.363285"),
+                    Timestamp("2020-04-16 00:06:32.382405"),
+                ],
+            }),
+            True,
+            id="invalid-species",
+        ),
+    ],
+)
+def test_species_clustering(
+    mocked_species: str,
+    mocked_df: DataFrame,
+    should_raise: bool,
+) -> None:
+    """Mocked read_csv to test load_pod_folder column validation."""
+    if should_raise:
+        with pytest.raises((ValueError, KeyError)):
+            process_feeding_buzz(df=mocked_df, species=mocked_species)
+        return
+
+    result = process_feeding_buzz(df=mocked_df, species=mocked_species)
+
+    assert isinstance(result, DataFrame)
+    assert list(result.columns) == ["Datetime", "Buzz", "fbm_count"]
+    assert len(result) == 1
 
 
-# parse_timestamps
-# def test_parse_timestamps() -> None:
-#     df = DataFrame({"date": ["2024-01-01T10:00:00", "06/01/2025 08:35"]})
-#     result = parse_timestamps(df, "date")
-#     expected = DataFrame({"date": ["2024-01-01 10:00:00",
-#                                    "2025-01-06 08:35:00"]}).astype("datetime64[ns]")
-#     assert_frame_equal(result, expected)
+# process_timelost
+@pytest.fixture
+def sample_tl_df() -> DataFrame:
+    return DataFrame({
+        "File": ["filename1", "filename2", "filename1"],
+        "Temp": [20.9, 20.1, 0],
+        "Angle": [0, 0, 100],
+        "%TimeLost": [0, 0, 100],
+        "Deploy": ["deploy1", "deploy2", "deploy1"],
+        "Datetime": [
+            Timestamp("2022-11-30 10:59:00"),
+            Timestamp("2022-11-30 11:59:00"),
+            Timestamp("2022-11-30 12:59:00"),
+        ],
+        "Nall/m": [57, 106, 0],
+    })
 
-# deploy_period
-# def test_deploy_period() -> None:
-#     df = DataFrame(
-#         {
-#             "deploy.name": ["A", "A", "B"],
-#             "start_datetime": [
-#                 datetime(2024, 1, 1, 10, 0, tzinfo=datetime.timezone.utc),
-#                 datetime(2024, 1, 2, 15, 30, tzinfo=datetime.timezone.utc),
-#                 datetime(2024, 1, 3, 8, 0, tzinfo=datetime.timezone.utc),
-#             ],
-#         })
-#
-#     expected = DataFrame(
-#         {
-#             "deploy.name": ["A", "B"],
-#             "Début": [
-#                 datetime(2024, 1, 1, 10, 0, tzinfo=datetime.timezone.utc),
-#                 datetime(2024, 1, 3, 8, 0, tzinfo=datetime.timezone.utc),
-#             ],
-#             "Fin": [
-#                 datetime(2024, 1, 2, 15, 30, tzinfo=datetime.timezone.utc),
-#                 datetime(2024, 1, 3, 8, 0, tzinfo=datetime.timezone.utc),
-#             ],
-#         })
-#     result = deploy_period(df)
-#     assert_frame_equal(result, expected)
 
-# actual_data
+threshold = rng.randrange(1, 100)
+
+
+def test_timelost_process(sample_tl_df: DataFrame, timezone: tzinfo) -> None:
+    """Test that basic structure and required columns are present."""
+    result = process_timelost(
+        df=sample_tl_df,
+        threshold=threshold,
+    )
+
+    expected_columns = [
+        "File",
+        "Temp",
+        "Angle",
+        "%TimeLost",
+        "Deploy",
+        "Datetime",
+    ]
+
+    assert isinstance(result, DataFrame)
+    assert list(result.columns) == expected_columns
+    assert set(result["Deploy"]) == {"deploy1", "deploy2"}

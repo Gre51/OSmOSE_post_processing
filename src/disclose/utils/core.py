@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 import astral
 import easygui
 from astral.sun import sunrise, sunset
-from matplotlib import pyplot as plt
 from pandas import (
     DataFrame,
     DatetimeIndex,
@@ -27,6 +26,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import matplotlib.pyplot as plt
+
+
+def build_time_vector(df: DataFrame, bin_size: Timedelta) -> DatetimeIndex:
+    """Build a time vector from a DataFrame and a frequency."""
+    t1 = min(df["start_datetime"]).floor(bin_size)
+    t2 = max(df["end_datetime"]).ceil(bin_size)
+    return date_range(start=t1, end=t2, freq=bin_size)
 
 
 def get_season(ts: Timestamp, *, northern: bool = True) -> tuple[str, int]:
@@ -363,9 +369,7 @@ def get_count(
     labels, annotators = get_labels_and_annotators(df)
 
     series_list = [
-        df[(df["annotation"] == label) & (df["annotator"] == annotator)][
-            "start_datetime"
-        ]
+        df[(df["label"] == label) & (df["annotator"] == annotator)]["start_datetime"]
         for label, annotator in zip(labels, annotators, strict=False)
     ]
 
@@ -377,7 +381,7 @@ def get_count(
 
 
 def get_labels_and_annotators(df: DataFrame) -> tuple[list, list]:
-    """Extract and align annotation labels and annotators from an APLOSE DataFrame.
+    """Extract and align labels and annotators from an APLOSE DataFrame.
 
     Parameters
     ----------
@@ -394,8 +398,8 @@ def get_labels_and_annotators(df: DataFrame) -> tuple[list, list]:
         msg = "`df` contains no data"
         raise ValueError(msg)
 
-    unique_pairs = df[["annotator", "annotation"]].drop_duplicates()
-    return unique_pairs["annotation"].to_list(), unique_pairs["annotator"].to_list()
+    unique_pairs = df[["annotator", "label"]].drop_duplicates()
+    return unique_pairs["label"].to_list(), unique_pairs["annotator"].to_list()
 
 
 def localize_timestamps(timestamps: list[Timestamp], tz: tzinfo) -> list[Timestamp]:
