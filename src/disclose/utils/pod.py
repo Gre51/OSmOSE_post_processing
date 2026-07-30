@@ -589,7 +589,7 @@ def calendar(
             mask & (data["start_recording"] > data["end_recording"]),
             ["start_recording", "end_recording"],
         ] = None
-        data = data.sort_values(["Phase", "start_deployment"]).reset_index(drop=True)
+        data = data.sort_values(["start_deployment"]).reset_index(drop=True)
 
     color_cycle = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
     site_colors = {site: next(color_cycle) for site in data["Site"].unique()}
